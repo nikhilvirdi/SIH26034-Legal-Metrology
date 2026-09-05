@@ -24,7 +24,7 @@ Strip away the legal language, and every retail package has to carry: the manufa
 
 A close reading of the text surfaces a few things that don't show up in casual summaries.
 
-Font size isn't just "must be legible" in vague terms. The law sets exact minimum numeral heights in millimetres, scaled to how much the product weighs or how large the label is, and checking it needs an actual measurement, not just OCR confidence.
+Font size isn't just "must be legible" in vague terms. The law sets exact minimum numeral heights in millimetres, scaled to the size of the label itself, and checking it needs an actual measurement, not just OCR confidence.
 
 Where declarations sit on the package matters too. They have to appear on what the law calls the "principal display panel," and the Rules allow that information to be split across two different spots on the same package rather than grouped in one photographable area.
 
@@ -50,7 +50,7 @@ Retail and wholesale packages are genuinely different rule sets too. A wholesale
 
 The original 2011 text is not the current law. It has been amended several times, and most casual references to it are out of date.
 
-**2017:** e-commerce listings became legally required to carry the same information as a physical label, with an exact list: manufacturer's name and address, country of origin, generic name, net quantity, best-before date, MRP, and dimensions. The date of manufacture is explicitly not required on a listing. The same amendment banned declaring two different MRPs on what's meant to be an identical product, and increased the minimum font sizes (the exact current figures are still being confirmed against the official source).
+**2017:** e-commerce listings became legally required to carry the same information as a physical label, with an exact list: manufacturer's name and address, country of origin, generic name, net quantity, best-before date, MRP, and dimensions. The date of manufacture is explicitly not required on a listing. The same amendment banned declaring two different MRPs on what's meant to be an identical product, and replaced the old weight-based font-size table with one keyed to the label's own area instead.
 
 **2022:** added to the list of exempted packages, and allowed QR codes as an official way to display extra information for electronic devices.
 
@@ -68,10 +68,81 @@ Whether a shop is actually charging at or below the printed MRP needs the till r
 
 ### Still open
 
-Combination, group, and multi-piece packages are a real category that has been identified but not yet designed for.
+The field-by-field breakdown for combination and group packages goes only as far as a default treatment for now: the outer package checked like a retail package for its own combined declarations, and any individually declared items inside checked the same way. Refining this further is reasonable future work.
 
-The exact current Rule 7 font-size numbers changed in 2017. The replacement figures have not yet been verified against the official source.
+Exactly how the app should signal to an officer that a font-size check was skipped on purpose, for a wholesale package or a medical device, rather than silently missing, is still to be worked out.
 
 ### Who this is actually for
 
 This isn't assumed outright, but the problem statement's own language (dashboards for enforcement officials, role-based access, a searchable inspection history) points squarely at enforcement officers doing inspections as the intended users, not consumers or manufacturers checking their own labels.
+
+## The Solution
+
+At its core, this is a mobile-first tool for the enforcement officers described above. An officer photographs a packaged product, or captures a screenshot of an online listing, and the system takes it from there: detecting every legally required declaration, measuring what needs measuring, checking it all against the actual Rules, cross-checking the manufacturer against the real government registry, and producing a compliance report with a verdict tied to a specific rule. Anything the system isn't confident about gets routed to a person before any verdict is finalized, and every scan feeds a searchable history that determines penalty escalation on repeat offenses.
+
+### The workflow
+
+Before anything is scanned, three quick manual selections are made: the commodity category (food, cosmetic, alcohol, seed, medical device, or general), the specific commodity type where it matters for standard-size checking, and the package type (retail, wholesale, or combination, group, and multi-piece).
+
+For a physical product, front, back, and side photos are taken while an AR session runs quietly in the background, establishing a real-world scale for that photo. A coin substitutes for this only on devices that can't run AR. For an online listing, a screenshot replaces the photo step entirely.
+
+From there, a fine-tuned YOLOv8 model finds where each declaration sits across the photo set, OCR reads what's inside each region in Hindi or English, and for retail packages, font height and color contrast get measured against the actual legal thresholds. Wholesale packages, medical devices, and combination or group packages skip that measurement stage entirely, each for its own legal reason.
+
+Everything gets checked against the Rules themselves: presence, format, standard package sizes, category-specific exceptions, a check for duplicate MRPs on the same product over time, and the manufacturer's registration status with the government. Anything read with low confidence goes to a person for confirmation regardless of what it appears to say, since a confirmed violation and a mismatch that turns out to be a legitimate price revision look identical to an automated check, and only a person can reliably tell them apart.
+
+The result is a report citing the specific rule behind every violation, exportable as a PDF or an editable file, shareable with the inspected business, and filed into a history that tracks each violation's legal status over time. Officers see all of it through a dashboard, with access levels mirroring the Act's own structure: Officer, Controller, Director.
+
+### Font size, with the current numbers
+
+The original rule tied minimum numeral height to a product's weight or volume. A 2017 amendment (G.S.R. 629(E)) replaced that entirely with a table keyed to the area of the label itself, matching the variable already used for length- and count-based products.
+
+| Label area | Minimum numeral height | If blown, formed, or molded |
+|---|---|---|
+| under 50 cm² | 1.0 mm | 1.5 mm |
+| 50 to 100 cm² | 1.5 mm | 3.0 mm |
+| 100 to 500 cm² | 2.5 mm | 4.0 mm |
+| 500 to 2500 cm² | 4.0 mm | 6.0 mm |
+| over 2500 cm² | 6.0 mm | 6.0 mm |
+
+A related exemption threshold changed too: packages of 10 cubic cm or less, up from 5, can satisfy the whole requirement with a simple tag rather than printed panel text.
+
+## Data Sources
+
+Training data for the field-detection model was gathered by cross-checking results across three different AI assistants, then manually verifying every dataset that got named before trusting it. A fair number of confidently reported datasets turned out to be mislabeled, non-Indian, or missing the classes they claimed to have. What's below survived that check.
+
+| Dataset | Volume | Classes / content | Used for | Link |
+|---|---|---|---|---|
+| Legal Metrology OCR | 188 images | MRP, net quantity, manufacturer details, manufacturing date, expiry date, consumer care, country of origin, generic name, unit sale price | Primary fine-tuning set; the closest real-world match to every field needed | [link](https://universe.roboflow.com/poppie-gamer/legal-metrology-ocr) |
+| "55" | 311 images | MRP, net quantity, manufacturing date, brand name, expiry date | Fine-tuning, a strong multi-class Indian match | [link](https://universe.roboflow.com/kavi-k/55-sioct) |
+| overall_uva | 2,524 images | MRP, net quantity, brand name, due date, flavour | Volume for the MRP and net-quantity classes | [link](https://universe.roboflow.com/original-w8shk/overall_uva) |
+| MRP (satender) | 254 images | MRP only | MRP-class augmentation, confirmed Indian sourcing | [link](https://universe.roboflow.com/satender/mrp) |
+| VIP_MRP (satender) | 357 images | MRP only | MRP-class augmentation | [link](https://universe.roboflow.com/satender/vip_mrp) |
+| dataset-2 | 200 images | Manufacturing date, brand name, expiry date, flavour, logo | Manufacturing-date augmentation | [link](https://universe.roboflow.com/uvarajanworkspace/dataset-2-rl7ts) |
+| label-detection-civy2 | 68 images | Address, barcode, QR code, post code | The only usable manufacturer-address proxy found, from a shipping-label context | [link](https://universe.roboflow.com/tim-4ijf0/label-detection-civy2) |
+| product_label_image | 288 images | Barcode, brand name, country of origin, customer care | Country-of-origin and consumer-care class augmentation | [link](https://universe.roboflow.com/vivek-td1tx/product_label_image-35vzw) |
+| yuktika | 44 images | Batch, brand, category, expiry, label of product | Small supplementary set | [link](https://universe.roboflow.com/navya-7lyxx/yuktika) |
+| Amrita Vishwa Vidyapeetham expiry dataset | 114 images | Expiry date, on medicine packaging | Date-class augmentation from a verified Indian academic source | [link](https://universe.roboflow.com/amrita-vishwa-vidyapeetham-wtgwo/expiry-date-detection-6gkga) |
+| Open Food Facts India | roughly 13,000 products | Raw, unlabeled product photos | Auto-labeling source and general packaging-photo volume | [link](https://in.openfoodfacts.org) |
+| Amazon India product data | 1,351 products | Tabular product data with image links, prices in rupees | Additional raw Indian packaging imagery | [link](https://www.kaggle.com/code/ducminh0401/amazon-dataset-preprocessing) |
+
+A few more worth naming for what they're not used for. The "mrp label" dataset from Grid (803 images) is kept only for background and negative-sample diversity, since its actual classes turned out to be mostly unrelated snack-brand names rather than anything field-related. The Pharmaceutical Ointments dataset from Kaggle is tabular, not visual, and feeds the compliance rule-checking logic directly rather than any training set.
+
+Dedicated barcode datasets that came up during the search, including a Roboflow barcode set and a Kaggle barcode-recognition dataset, are no longer needed. Barcode detection now runs through Android's own ML Kit instead of a custom-trained model, which removed that whole line of searching entirely.
+
+The one gap that stayed a gap through every search pass: no dataset dedicated to printed manufacturer name and address blocks on product packaging exists publicly. The shipping-label dataset above is the closest proxy available. The real answer here is the team's own photographed set, combined with auto-labeling run over the raw Open Food Facts images.
+
+## Tech Stack
+
+Every choice here was weighed against a real alternative, not picked out of habit.
+
+The officer-facing capture app is Android-native, built in Kotlin with ARCore, rather than cross-platform. AR reliability already carries enough risk on its own, and a cross-platform AR plugin on top of that would only add to it; ARCore remains the most mature implementation available. Barcode detection runs through Android's ML Kit Barcode Scanning API instead of a custom-trained model, since it's already a solved, pretrained, on-device problem with nothing to gain from retraining it.
+
+The backend runs on Node.js with Express and TypeScript, matching the team's existing strength. Nothing about this project needs a different paradigm; it's fundamentally a CRUD-and-orchestration system layered over an ML service, which is exactly what this stack is built for.
+
+The database is PostgreSQL through Prisma, with a single JSONB column set aside for the genuinely variable-shape scan-results data, since a wholesale product's three fields look nothing like a combination package's nested declarations. Everything else, manufacturers, violations, penalty history, the scraped government registry, stays properly relational. Postgres's pg_trgm extension also handles the fuzzy name-matching that both the registry cross-check and the product-deduplication logic need, directly in SQL, without adding a separate matching service.
+
+The ML inference layer is a Python service built on FastAPI, wrapping YOLOv8, PaddleOCR, and Qwen2.5-VL as REST endpoints the main backend calls into. The dashboard is React with TypeScript, talking to the same Express API the mobile app uses.
+
+Compliance reports are rendered as HTML through Puppeteer and printed to PDF, with the same HTML doubling as the editable export, since building a good-looking PDF this way tends to be more reliable than most dedicated PDF libraries. The manufacturer registry itself is kept current through a scheduled Python scraper rather than a live lookup, since registration status doesn't change minute to minute. The e-commerce path needs no scraping tool at all: an officer's screenshot travels through the exact same photo-upload path as a physical product photo.
+
+Authentication is self-rolled, JWT with bcrypt inside Express, deliberately avoiding a third-party identity provider given these are government-context credentials. Deployment runs on Docker and docker-compose with AWS as the eventual target, Nginx in front as a reverse proxy, and GitHub Actions for CI. Kubernetes was considered and set aside as unnecessary operational weight for a hackathon timeline.
