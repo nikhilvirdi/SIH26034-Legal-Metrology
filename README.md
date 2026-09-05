@@ -1,6 +1,6 @@
 # SIH26034-Legal-Metrology
 
-Software system to check compliance of packaged commodities under the Legal Metrology (Packaged Commodities) Rules, 2011 by scanning products, images, and labels.
+Software system to check compliance of packaged commodities under the [Legal Metrology (Packaged Commodities) Rules, 2011](docs/legal-metrology-packaged-commodities-rules-2011.pdf) by scanning products, images, and labels.
 
 Built for Smart India Hackathon 2026 (SIH).
 
@@ -14,7 +14,7 @@ A finite number of enforcement officers can't manually apply Legal Metrology's d
 
 ## Understanding the Actual Law
 
-The problem statement does not define what "checking compliance" actually means. That part is left open, so this understanding comes from a full reading of the Legal Metrology Act, 2009 and the Packaged Commodities Rules, 2011, along with every amendment made to them since. The version of this law most people casually reference is missing over a decade of changes.
+The problem statement does not define what "checking compliance" actually means. That part is left open, so this understanding comes from a full reading of the Legal Metrology Act, 2009 and the [Packaged Commodities Rules, 2011](docs/legal-metrology-packaged-commodities-rules-2011.pdf), along with every amendment made to them since. The version of this law most people casually reference is missing over a decade of changes.
 
 ### What every package is actually required to say
 
@@ -46,6 +46,8 @@ Medical devices are their own separate story. They only came under Legal Metrolo
 
 Retail and wholesale packages are genuinely different rule sets too. A wholesale package only needs three declarations, not the full retail list.
 
+Combination, group, and multi-piece packages, gift sets and multi-item kits bundled as one product, are treated as their own package type rather than squeezed into retail or wholesale. The outer package is checked like a retail package for its own combined declarations (its own MRP, its own overall net quantity), and if individual items inside also carry their own printed declarations, each of those is checked the same way an individual retail package would be. This mirrors how the Rules already handle multi-component packages sold as one unit.
+
 ### What changed since 2011
 
 The original 2011 text is not the current law. It has been amended several times, and most casual references to it are out of date.
@@ -56,7 +58,7 @@ The original 2011 text is not the current law. It has been amended several times
 
 **2023:** introduced new package categories, combination packages and group packages, essentially gift sets and multi-item kits, which don't fit cleanly into a simple retail-or-wholesale split.
 
-**2024 (proposed, not yet finalized):** would extend mandatory declarations to currently-exempt bulk packages over 25kg.
+**2024 (proposed, not yet finalized):** would extend mandatory declarations to currently-exempt bulk packages over 25kg. Worth watching, not yet something to design around.
 
 ### What's deliberately out of scope
 
@@ -66,31 +68,43 @@ Whether a package's actual weight matches its declared weight, the Maximum Permi
 
 Whether a shop is actually charging at or below the printed MRP needs the till receipt rather than the package label, since it comes from a different data source entirely.
 
-### Still open
-
-The field-by-field breakdown for combination and group packages goes only as far as a default treatment for now: the outer package checked like a retail package for its own combined declarations, and any individually declared items inside checked the same way. Refining this further is reasonable future work.
-
-Exactly how the app should signal to an officer that a font-size check was skipped on purpose, for a wholesale package or a medical device, rather than silently missing, is still to be worked out.
-
 ### Who this is actually for
 
 This isn't assumed outright, but the problem statement's own language (dashboards for enforcement officials, role-based access, a searchable inspection history) points squarely at enforcement officers doing inspections as the intended users, not consumers or manufacturers checking their own labels.
 
 ## The Solution
 
-At its core, this is a mobile-first tool for the enforcement officers described above. An officer photographs a packaged product, or captures a screenshot of an online listing, and the system takes it from there: detecting every legally required declaration, measuring what needs measuring, checking it all against the actual Rules, cross-checking the manufacturer against the real government registry, and producing a compliance report with a verdict tied to a specific rule. Anything the system isn't confident about gets routed to a person before any verdict is finalized, and every scan feeds a searchable history that determines penalty escalation on repeat offenses.
+At its core, this is a mobile-first tool for the enforcement officers described above. An officer photographs a packaged product, or captures a screenshot of an online listing, and the system takes it from there: detecting every legally required declaration, measuring what needs measuring, checking it all against the actual Rules, cross-checking the manufacturer against the [real government registry](https://lm.doca.gov.in/pcr/certificates), and producing a compliance report with a verdict tied to a specific rule. Anything the system isn't confident about gets routed to a person before any verdict is finalized, and every scan feeds a searchable history that determines penalty escalation on repeat offenses.
 
-### The workflow
+![Architecture diagram](docs/architecture-diagram.svg)
 
-Before anything is scanned, three quick manual selections are made: the commodity category (food, cosmetic, alcohol, seed, medical device, or general), the specific commodity type where it matters for standard-size checking, and the package type (retail, wholesale, or combination, group, and multi-piece).
+### The workflow, step by step
 
-For a physical product, front, back, and side photos are taken while an AR session runs quietly in the background, establishing a real-world scale for that photo. A coin substitutes for this only on devices that can't run AR. For an online listing, a screenshot replaces the photo step entirely.
+1. The officer selects the package type (retail, wholesale, or combination, group, and multi-piece) and the commodity category (food, cosmetic, alcohol, seed, medical device, or general).
+2. The specific commodity type (biscuits, tea, edible oil, and so on, wherever a fixed pack size applies) is auto-suggested from the product's generic name once that text is read off the label, and the officer is only asked to confirm or correct it when the match is ambiguous or missing.
+3. For a physical product, front, back, and side photos are captured while an AR session runs in the background, establishing a real-world scale for that photo. A coin substitutes for this only on devices that can't run AR. For an online listing, a screenshot is captured instead, and the next two steps are skipped entirely.
+4. A fine-tuned YOLOv8 model detects each declaration across the photo set: MRP, net quantity, manufacturer details, date, consumer care, country of origin, and generic name. Barcode detection runs separately through Android's own ML Kit, since that's already a solved, pretrained problem with nothing to gain from retraining it.
+5. Each detected region is read by PaddleOCR first. Only when PaddleOCR's own confidence is low, or the region looks curved or distorted, does that specific region get escalated to Qwen2.5-VL for a second pass. Text is read in Hindi or English.
+6. For retail packages, numeral height and color contrast are measured against the current legal thresholds, using the AR- or coin-derived scale. Wholesale packages, medical devices, and combination or group packages skip this step entirely, each for its own legal reason.
+7. Every extracted value is checked against the Rules themselves: presence, format, the standard package-size list, the category-specific exceptions, a check against the product's own MRP history for a duplicate-MRP violation, and the manufacturer's name and address against the government's own registration list.
+8. A field that was never detected in any of the photos is not treated as a confirmed absence. It's routed to a person for confirmation, the same as a low-confidence read, since a detector's blind spot and a business's actual omission would otherwise look identical, and the system should never decide non-compliance purely on its own silence.
+9. If the registry lookup fails, or the manufacturer's name doesn't confidently match anything in it, the report says the check was inconclusive rather than claiming the business isn't registered.
+10. Once a field has a trustworthy reading, a verdict, pass, fail, or not applicable, is worked out separately from how confident that reading was. A well-read field can still genuinely fail a check, which is a different thing from uncertainty about what it said.
+11. A report is produced citing the specific rule behind every violation, exportable as a PDF or an editable file, shareable with the inspected business, and saved into a history keyed to the product's barcode where one exists, or its name and address otherwise.
+12. That history carries a status for every violation (flagged, appealed, upheld, dismissed, or compounded), and only the confirmed ones count toward the escalating penalty for repeat offenses.
+13. Everything is visible through a dashboard, with access mirroring the Act's own structure: Officer, Controller, Director.
 
-From there, a fine-tuned YOLOv8 model finds where each declaration sits across the photo set, OCR reads what's inside each region in Hindi or English, and for retail packages, font height and color contrast get measured against the actual legal thresholds. Wholesale packages, medical devices, and combination or group packages skip that measurement stage entirely, each for its own legal reason.
+### Reviewing the design once more
 
-Everything gets checked against the Rules themselves: presence, format, standard package sizes, category-specific exceptions, a check for duplicate MRPs on the same product over time, and the manufacturer's registration status with the government. Anything read with low confidence goes to a person for confirmation regardless of what it appears to say, since a confirmed violation and a mismatch that turns out to be a legitimate price revision look identical to an automated check, and only a person can reliably tell them apart.
+A second pass through the whole solution, asking plainly why each piece exists and whether something better was available, changed a few things.
 
-The result is a report citing the specific rule behind every violation, exportable as a PDF or an editable file, shareable with the inspected business, and filed into a history that tracks each violation's legal status over time. Officers see all of it through a dashboard, with access levels mirroring the Act's own structure: Officer, Controller, Director.
+Running both OCR engines on every field, all the time, was decided against. PaddleOCR reads a region first, and Qwen2.5-VL only gets called in when PaddleOCR's own confidence is low or the region looks curved or distorted. The hard cases still get the stronger read; the easy ones, which are most of them, don't pay the cost of a second model.
+
+Asking the officer to pick the exact commodity type by hand, every single time, was also reconsidered. The generic name is already being read off the label for other reasons, so it now auto-suggests the commodity type against the Schedule II list, and the officer is only asked when that match comes back ambiguous or empty.
+
+A more structural issue surfaced too. A field the detector never found was being treated the same as a field the law confirms isn't there, and those aren't the same claim; conflating them meant a detector's own blind spot could end up looking like a real violation against a compliant business. The fix runs through both the field-detection step and the registry check: anything the system can't confidently establish gets marked inconclusive and sent to a person, rather than presented as a finding.
+
+Two choices were checked again and kept as they were. A vision-language model could, in principle, localize fields on its own, but its grounding tends to be coarser than a model trained specifically for the task, and measuring font height needs a tight box rather than an approximate one, so YOLOv8 stays. AR-based scale calibration was re-examined against a barcode-as-ruler shortcut and a proportional-measurement shortcut; both were already ruled out for good reasons, since printed barcode size legally varies and a proportional check doesn't actually implement what the law requires, so AR remains the right call, with its real demo risk kept visible rather than smoothed over.
 
 ### Font size, with the current numbers
 
@@ -103,6 +117,8 @@ The original rule tied minimum numeral height to a product's weight or volume. A
 | 100 to 500 cm² | 2.5 mm | 4.0 mm |
 | 500 to 2500 cm² | 4.0 mm | 6.0 mm |
 | over 2500 cm² | 6.0 mm | 6.0 mm |
+
+Source: [Section 7, Legal Metrology (Packaged Commodities) Rules, 2011, as amended](https://indiankanoon.org/doc/151004919/).
 
 A related exemption threshold changed too: packages of 10 cubic cm or less, up from 5, can satisfy the whole requirement with a simple tag rather than printed panel text.
 
@@ -125,24 +141,27 @@ Training data for the field-detection model was gathered by cross-checking resul
 | Open Food Facts India | roughly 13,000 products | Raw, unlabeled product photos | Auto-labeling source and general packaging-photo volume | [link](https://in.openfoodfacts.org) |
 | Amazon India product data | 1,351 products | Tabular product data with image links, prices in rupees | Additional raw Indian packaging imagery | [link](https://www.kaggle.com/code/ducminh0401/amazon-dataset-preprocessing) |
 
-A few more worth naming for what they're not used for. The "mrp label" dataset from Grid (803 images) is kept only for background and negative-sample diversity, since its actual classes turned out to be mostly unrelated snack-brand names rather than anything field-related. The Pharmaceutical Ointments dataset from Kaggle is tabular, not visual, and feeds the compliance rule-checking logic directly rather than any training set.
+A few more worth naming for what they're not used for. The "mrp label" dataset from Grid (803 images) is kept only for background and negative-sample diversity, since its actual classes turned out to be mostly unrelated snack-brand names rather than anything field-related. The [Pharmaceutical Ointments dataset](https://www.kaggle.com/datasets/ajayjaat/pharmaceutical-ointments-dataset) from Kaggle is tabular, not visual, and feeds the compliance rule-checking logic directly rather than any training set.
 
 Dedicated barcode datasets that came up during the search, including a Roboflow barcode set and a Kaggle barcode-recognition dataset, are no longer needed. Barcode detection now runs through Android's own ML Kit instead of a custom-trained model, which removed that whole line of searching entirely.
 
-The one gap that stayed a gap through every search pass: no dataset dedicated to printed manufacturer name and address blocks on product packaging exists publicly. The shipping-label dataset above is the closest proxy available. The real answer here is the team's own photographed set, combined with auto-labeling run over the raw Open Food Facts images.
+The one gap that stayed a gap through every search pass: no dataset dedicated to printed manufacturer name and address blocks on product packaging exists publicly. The shipping-label dataset above is the closest proxy available. The plan here is a self-photographed dataset, combined with auto-labeling run over the raw Open Food Facts images, since no amount of further searching turned up anything closer.
 
 ## Tech Stack
 
-Every choice here was weighed against a real alternative, not picked out of habit.
+Every choice below was weighed against a real alternative, not picked out of habit.
 
-The officer-facing capture app is Android-native, built in Kotlin with ARCore, rather than cross-platform. AR reliability already carries enough risk on its own, and a cross-platform AR plugin on top of that would only add to it; ARCore remains the most mature implementation available. Barcode detection runs through Android's ML Kit Barcode Scanning API instead of a custom-trained model, since it's already a solved, pretrained, on-device problem with nothing to gain from retraining it.
-
-The backend runs on Node.js with Express and TypeScript, matching the team's existing strength. Nothing about this project needs a different paradigm; it's fundamentally a CRUD-and-orchestration system layered over an ML service, which is exactly what this stack is built for.
-
-The database is PostgreSQL through Prisma, with a single JSONB column set aside for the genuinely variable-shape scan-results data, since a wholesale product's three fields look nothing like a combination package's nested declarations. Everything else, manufacturers, violations, penalty history, the scraped government registry, stays properly relational. Postgres's pg_trgm extension also handles the fuzzy name-matching that both the registry cross-check and the product-deduplication logic need, directly in SQL, without adding a separate matching service.
-
-The ML inference layer is a Python service built on FastAPI, wrapping YOLOv8, PaddleOCR, and Qwen2.5-VL as REST endpoints the main backend calls into. The dashboard is React with TypeScript, talking to the same Express API the mobile app uses.
-
-Compliance reports are rendered as HTML through Puppeteer and printed to PDF, with the same HTML doubling as the editable export, since building a good-looking PDF this way tends to be more reliable than most dedicated PDF libraries. The manufacturer registry itself is kept current through a scheduled Python scraper rather than a live lookup, since registration status doesn't change minute to minute. The e-commerce path needs no scraping tool at all: an officer's screenshot travels through the exact same photo-upload path as a physical product photo.
-
-Authentication is self-rolled, JWT with bcrypt inside Express, deliberately avoiding a third-party identity provider given these are government-context credentials. Deployment runs on Docker and docker-compose with AWS as the eventual target, Nginx in front as a reverse proxy, and GitHub Actions for CI. Kubernetes was considered and set aside as unnecessary operational weight for a hackathon timeline.
+| Component | Choice | Why |
+|---|---|---|
+| Officer capture app | Android-native, Kotlin, ARCore | AR reliability already carries enough risk on its own; a cross-platform AR plugin on top would only add to it, and ARCore remains the most mature implementation available |
+| Barcode detection | Android ML Kit Barcode Scanning API | Already a solved, pretrained, on-device problem, with nothing to gain from training a custom model for it |
+| Backend API | Node.js, Express, TypeScript | The project is fundamentally a CRUD-and-orchestration system layered over an ML service, which this stack handles directly, and keeping the backend and dashboard in the same language reduces context-switching |
+| Database | PostgreSQL with Prisma, plus a JSONB column for scan-results data | Most of the data (manufacturers, violations, penalty history, the scraped registry) is properly relational; the scan-results blob genuinely varies in shape by package type, so it gets a JSONB column instead of forcing a fixed schema on it |
+| Fuzzy matching | Postgres `pg_trgm` extension | Handles the fuzzy name-matching that both the registry cross-check and product deduplication need, directly in SQL, without a separate matching service |
+| ML inference service | Python, FastAPI | YOLOv8, PaddleOCR, and Qwen2.5-VL are all Python-ecosystem tools; FastAPI wraps them as REST endpoints the backend calls into |
+| Dashboard | React, TypeScript | Same language as the rest of the stack, talking to the same Express API the mobile app uses |
+| Report generation | Puppeteer (HTML rendered to PDF) | The same HTML doubles as the editable export, and this tends to produce better-looking PDFs than most dedicated PDF libraries |
+| Manufacturer registry | Scheduled Python scraper (Playwright or BeautifulSoup) into Postgres | Registration status doesn't change minute to minute, so a periodic scrape is enough; no need for a live lookup |
+| E-commerce path | Reuses the existing photo-upload path | An officer's screenshot of a listing needs no separate scraping tool; it's just another image into the same pipeline |
+| Authentication | Self-rolled JWT with bcrypt in Express | Avoids routing government-context credentials through a third-party identity provider |
+| Deployment | Docker, docker-compose, AWS, Nginx, GitHub Actions | Standard, well-supported tooling; Kubernetes was considered and set aside as unnecessary operational weight for a hackathon timeline |
