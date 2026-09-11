@@ -1,11 +1,12 @@
 [versions]
-agp = "8.7.3"
+agp = "8.13.2"
 kotlin = "2.1.0"
 coreKtx = "1.15.0"
 lifecycleRuntimeKtx = "2.8.7"
 activityCompose = "1.9.3"
 composeBom = "2024.12.01"
 navigationCompose = "2.8.5"
+material = "1.12.0"
 hilt = "2.54"
 hiltNavigationCompose = "1.2.0"
 ksp = "2.1.0-1.0.29"
@@ -16,7 +17,7 @@ kotlinSerialization = "1.7.3"
 retrofitKotlinSerialization = "1.0.0"
 coroutines = "1.9.0"
 arcore = "1.46.0"
-mlkitBarcode = "18.3.1"
+mlkitBarcode = "17.3.0"
 lottie = "6.6.2"
 coil = "2.7.0"
 itext = "7.2.5"
@@ -33,6 +34,8 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-splash-screen = { group = "androidx.core", name = "core-splashscreen", version.ref = "splashScreen" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+
 
 # Compose
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
@@ -79,7 +82,7 @@ lottie-compose = { group = "com.airbnb.android", name = "lottie-compose", versio
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 
 # PDF generation
-itext-core = { group = "com.itextpdf", name = "itext-core", version.ref = "itext" }
+itext-core = { group = "com.itextpdf", name = "itext7-core", version.ref = "itext" }
 
 # Accompanist
 accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanist" }

@@ -14,11 +14,4 @@
         android:strokeWidth="3"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
-    <!-- MRP text hint -->
-    <text
-        android:fillColor="#C5CAE9"
-        android:fontFamily="sans-serif-medium"
-        android:textSize="8"
-        android:x="44"
-        android:y="68">LM</text>
 </vector>

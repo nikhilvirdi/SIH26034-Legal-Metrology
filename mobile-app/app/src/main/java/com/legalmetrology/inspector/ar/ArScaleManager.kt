@@ -67,7 +67,7 @@ class ArScaleManager @Inject constructor(
     val lastScaleMetadata: StateFlow<ArScaleMetadata?> = _lastScaleMetadata.asStateFlow()
 
     // Smoothing: keep a rolling average over the last N frames to reduce jitter
-    private val distanceHistory = ArrayDeque<Double>(maxSize = 10)
+    private val distanceHistory = ArrayDeque<Double>(10)
     private val SMOOTHING_WINDOW = 8
 
     /**

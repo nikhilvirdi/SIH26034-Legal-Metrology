@@ -70,6 +70,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.splash.screen)
+    implementation(libs.material)
 
     // Compose BOM (manages all compose versions together)
     implementation(platform(libs.androidx.compose.bom))
