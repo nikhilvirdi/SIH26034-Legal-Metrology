@@ -1,0 +1,16 @@
+<resources>
+    <!-- Base theme — dark, no action bar, used for most screens -->
+    <style name="Theme.LegalMetrology" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <!-- Splash screen theme — shown before Compose takes over -->
+    <!-- Uses core-splashscreen library (SplashScreen.Compat) -->
+    <style name="Theme.LegalMetrology.SplashScreen" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#0A0E1A</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.LegalMetrology</item>
+    </style>
+</resources>

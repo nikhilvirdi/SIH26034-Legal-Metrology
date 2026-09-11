@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- =================== PERMISSIONS =================== -->
+
+    <!-- Camera: required for AR scanning and photo capture -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Internet: required to send photos to backend inference pipeline -->
+    <!-- TODO: Remove if fully offline mode is implemented -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Storage: for exporting PDF compliance reports -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Vibration: for haptic feedback on AR lock -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- =================== HARDWARE FEATURES =================== -->
+
+    <!-- Camera is required for the core inspection workflow -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false" />
+
+    <!-- ARCore: optional — app gracefully degrades to coin-fallback if unavailable -->
+    <!-- ar.required="false" means we don't block non-ARCore devices from installing -->
+    <uses-feature
+        android:name="android.hardware.camera.ar"
+        android:required="false" />
+
+    <application
+        android:name=".LegalMetrologyApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.LegalMetrology"
+        tools:targetApi="31">
+
+        <!-- ARCore: declare Play Services for AR as optional dependency -->
+        <!-- This metadata tells the Play Store whether ARCore is required or optional -->
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
+
+        <!-- Main Activity (single-activity architecture with Compose Navigation) -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.LegalMetrology.SplashScreen"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
