@@ -1,0 +1,114 @@
+# Legal Metrology Inspector — Android App
+
+Kotlin + Jetpack Compose Android app for Legal Metrology enforcement officers.
+
+## Tech Stack
+
+| Layer | Library |
+|---|---|
+| UI | Jetpack Compose + Material3 |
+| AR calibration | ARCore + SceneView 2.2.1 |
+| Barcode detection | ML Kit Barcode Scanning |
+| Networking | Retrofit 2 + OkHttp |
+| Serialization | Kotlin Serialization |
+| Local database | Room |
+| DI | Hilt |
+| Animations | Lottie Compose |
+| PDF export | iText 7 Community |
+| Permissions | Accompanist Permissions |
+
+## Getting Started
+
+### Prerequisites
+1. [Android Studio Meerkat](https://developer.android.com/studio) (2024.3+)
+2. Android SDK API 26+ (minSdk 26)
+3. A physical Android device **with ARCore support** (recommended)
+   - Check: [ARCore supported devices](https://developers.google.com/ar/devices)
+   - The app degrades gracefully to coin-fallback on non-ARCore devices
+
+### Opening the Project
+1. Open Android Studio
+2. Select **Open an Existing Project**
+3. Navigate to `mobile-app/` and click **Open**
+4. Wait for Gradle sync to complete (~3–5 min first time)
+
+### Running on Device
+1. Enable **Developer Options** on your Android device
+2. Enable **USB Debugging**
+3. Connect via USB
+4. Click **▶ Run** in Android Studio
+
+### Demo Credentials
+| Role | Email | Password |
+|---|---|---|
+| Officer | officer@lm.gov.in | password123 |
+| Controller | controller@lm.gov.in | password123 |
+| Director | director@lm.gov.in | password123 |
+
+## Project Structure
+
+```
+app/src/main/java/com/legalmetrology/inspector/
+├── ar/
+│   ├── ArScaleManager.kt      ← ARCore metric calibration (mm/px)
+│   └── ArFrameCapture.kt      ← Full-res still capture + metadata
+├── data/
+│   ├── api/
+│   │   ├── ApiDtos.kt         ← Request/response DTOs
+│   │   └── MockInspectionApiService.kt ← MOCK: replace with Retrofit
+│   └── db/
+│       ├── InspectionDatabase.kt
+│       ├── InspectionDao.kt
+│       └── entity/
+├── domain/
+│   └── model/Models.kt        ← Pure domain models (no framework deps)
+├── di/                        ← Hilt DI modules
+├── ui/
+│   ├── navigation/            ← NavGraph + Screen routes
+│   ├── screens/
+│   │   ├── splash/
+│   │   ├── login/
+│   │   ├── onboarding/        ← Package type + category selection
+│   │   ├── scan/              ← AR camera + overlays (CORE)
+│   │   ├── review/            ← Photo review + submission
+│   │   ├── report/            ← Compliance verdict cards
+│   │   ├── history/           ← Past inspections
+│   │   ├── dashboard/         ← Officer home
+│   │   └── ecommerce/         ← Screenshot-based listing check
+│   └── theme/                 ← Colors, Typography, Theme
+├── LegalMetrologyApp.kt       ← @HiltAndroidApp
+└── MainActivity.kt
+```
+
+## Backend Integration
+
+All backend calls are currently **mocked** for demo. Look for `TODO — BACKEND INTEGRATION` comments throughout the codebase.
+
+Key integration points:
+- `MockInspectionApiService.kt` → replace with real Retrofit interface
+- `InspectionRepository` → add real network calls + Room caching
+- `ScanScreen.kt` → wire `ArSceneView` composable (SceneView library)
+- `ReviewScreen.kt` → replace mock progress with real multipart upload
+
+## ARCore Scale Calibration
+
+The metric conversion formula used:
+
+```
+Physical Height (mm) = pixelHeight × D_meters × 1000 / fy
+```
+
+Where:
+- `D_meters` = ARCore hit-test distance from camera to surface plane
+- `fy` = Y-axis focal length from `frame.camera.imageIntrinsics`
+- `pixelHeight` = YOLO bounding box height in pixels
+
+See `ArScaleManager.kt` for the full implementation.
+
+## Legal Metrology Rules Implemented
+
+- **Rule 7** (as amended G.S.R. 629(E), 2017): Label-area-based font size thresholds
+- **Rule 6(1)**: All 9 mandatory declaration fields
+- **Rule 18**: MRP format requirements
+- **2017 Amendment**: E-commerce listing mandatory fields
+- **Schedule II**: Standard pack sizes (biscuits, tea, edible oil, soft drinks)
