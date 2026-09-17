@@ -189,3 +189,26 @@ fastlane/readme.md
 # Migration and documentation artifacts (should be committed)
 !ARUCO_MIGRATION_SUMMARY.md
 !docs/ARUCO_MARKER_GENERATION.md
+
+# ============================================================
+# Python Backend (server/)
+# ============================================================
+
+server/__pycache__/
+server/*/__pycache__/
+server/*/*/__pycache__/
+server/venv/
+server/.env
+
+server/storage/raw/*
+!server/storage/raw/.gitkeep
+server/storage/crops/*
+!server/storage/crops/.gitkeep
+server/storage/annotated/*
+!server/storage/annotated/.gitkeep
+
+server/weights/*
+!server/weights/.gitkeep
+
+# Memory dumps
+*.hprof
