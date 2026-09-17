@@ -1,6 +1,7 @@
 package com.legalmetrology.inspector
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -12,6 +13,9 @@ import androidx.navigation.compose.rememberNavController
 import com.legalmetrology.inspector.ui.navigation.AppNavGraph
 import com.legalmetrology.inspector.ui.theme.LegalMetrologyTheme
 import dagger.hilt.android.AndroidEntryPoint
+import org.opencv.android.OpenCVLoader
+
+private const val TAG = "MainActivity"
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -23,6 +27,13 @@ class MainActivity : ComponentActivity() {
 
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Initialize OpenCV for ArUco marker detection
+        if (!OpenCVLoader.initDebug()) {
+            Log.e(TAG, "Unable to load OpenCV")
+        } else {
+            Log.d(TAG, "OpenCV loaded successfully")
+        }
 
         setContent {
             LegalMetrologyTheme {

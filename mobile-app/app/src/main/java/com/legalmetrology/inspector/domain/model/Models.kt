@@ -23,29 +23,26 @@ enum class CommodityCategory(val displayName: String) {
     GENERAL("General")
 }
 
-// --- AR measurement metadata ---
+// --- Scale measurement metadata ---
 
 /**
- * Spatial metadata captured alongside a photo frame.
- * Derived from ARCore intrinsics and hit-test distance.
+ * Scale calibration metadata captured alongside a photo frame.
+ * Derived from ArUco marker detection using OpenCV.
  *
- * Physical height (mm) = pixelHeight × distanceMeters × 1000 / focalLengthY
+ * Physical height (mm) = pixelHeight × mmPerPixel
  *
- * If ARCore is unavailable, the coin-fallback path populates mmPerPixel
- * via the known physical diameter of a standard 1-rupee coin (22mm).
+ * The ArUco marker is a physically printed 40mm × 40mm marker (DICT_6X6_100).
+ * Its pixel perimeter is measured in each frame, giving us an absolute mm/px ratio.
  */
 data class ArScaleMetadata(
-    val distanceMeters: Double,          // Camera-to-surface distance (D)
-    val focalLengthX: Float,             // fx from ARCore ImageIntrinsics
-    val focalLengthY: Float,             // fy from ARCore ImageIntrinsics
-    val mmPerPixel: Double,              // Derived conversion factor
-    val labelAreaCm2: Double = 0.0,      // Computed from AR plane bounds
-    val source: ScaleSource = ScaleSource.ARCORE
+    val mmPerPixel: Double,              // Derived conversion factor from ArUco marker
+    val markerPerimeterPx: Double = 0.0, // Measured pixel perimeter of the ArUco marker
+    val labelAreaCm2: Double = 0.0,      // Computed from detected label bounds
+    val source: ScaleSource = ScaleSource.ARUCO_MARKER
 )
 
 enum class ScaleSource {
-    ARCORE,             // Full ARCore plane detection + depth
-    COIN_FALLBACK,      // User placed a 1-rupee coin (22mm diameter known)
+    ARUCO_MARKER,       // ArUco marker detection (40mm × 40mm printed marker)
     MANUAL_ENTRY        // Officer manually typed the scale (last resort)
 }
 

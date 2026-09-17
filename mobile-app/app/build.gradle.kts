@@ -103,10 +103,14 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
-    // ARCore (physical scale calibration — the heart of the measurement system)
-    implementation(libs.arcore)
-    // SceneView: Compose-compatible AR rendering with Filament engine
-    implementation(libs.sceneview)
+    // CameraX (high-performance camera pipeline for ArUco marker detection)
+    implementation(libs.camerax.core)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
+
+    // OpenCV (ArUco marker detection for deterministic scale calibration)
+    implementation(libs.opencv)
 
     // ML Kit Barcode Scanning (on-device, pre-trained — no retraining needed)
     implementation(libs.mlkit.barcode.scanning)
