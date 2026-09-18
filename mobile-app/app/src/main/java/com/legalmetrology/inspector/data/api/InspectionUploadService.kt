@@ -8,9 +8,6 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.logging.HttpLoggingInterceptor
-import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -18,38 +15,23 @@ import java.util.concurrent.TimeUnit
 /**
  * Service for uploading inspection images to the FastAPI backend.
  *
- * This handles the HTTP multipart upload with OkHttp, including:
- * - Image file as multipart/form-data
- * - Additional form fields (package_type, category)
- * - Network execution on background thread (Dispatchers.IO)
- *
- * IMPORTANT: Replace <LOCAL_IP> with your development machine's actual Wi-Fi IPv4 address
- * (e.g., 192.168.1.100). You can find this by running `ipconfig` (Windows) or `ifconfig` (Mac/Linux).
- * DO NOT use "localhost" or "127.0.0.1" — on Android, these refer to the phone itself, not your PC.
+ * Uses ADB reverse tunnel: adb reverse tcp:8000 tcp:8000
+ * This maps 127.0.0.1:8000 on the Android device to localhost:8000 on the development machine.
  */
 class InspectionUploadService {
 
     companion object {
         private const val TAG = "InspectionUpload"
         
-        // Base URL for FastAPI backend
-        // Note: 127.0.0.1 works if running Android emulator and backend on same machine
-        // For physical device, replace with your PC's WiFi IP (e.g., 192.168.1.100)
-        private const val BASE_URL = "http://127.0.0.1:8000/api/v1"
-        private const val UPLOAD_ENDPOINT = "/inspections/upload"
+        // Base URL for FastAPI backend via ADB reverse tunnel
+        // Run: adb reverse tcp:8000 tcp:8000
+        private const val BASE_URL = "http://127.0.0.1:8000/api/v1/"
         
         private const val TIMEOUT_SECONDS = 60L
     }
 
     private val client: OkHttpClient by lazy {
-        val loggingInterceptor = HttpLoggingInterceptor { message ->
-            Log.d(TAG, message)
-        }.apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-
         OkHttpClient.Builder()
-            .addInterceptor(loggingInterceptor)
             .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -60,105 +42,70 @@ class InspectionUploadService {
      * Upload an inspection image to the backend.
      *
      * @param imageFile The captured image file to upload
-     * @param inspectionId Optional inspection ID (auto-generated on backend if null)
-     * @param packageType Type of package (default: "retail")
-     * @param category Product category (default: "General")
-     * @return UploadResult containing the response data or error information
+     * @param packageType Type of package (e.g., "retail")
+     * @param category Product category (e.g., "General")
+     * @return Result sealed class with Success or Error
      */
     suspend fun uploadInspectionImage(
         imageFile: File,
-        inspectionId: String? = null,
-        packageType: String = "retail",
-        category: String = "General"
-    ): UploadResult = withContext(Dispatchers.IO) {
+        packageType: String,
+        category: String
+    ): Result = withContext(Dispatchers.IO) {
         try {
             if (!imageFile.exists()) {
-                return@withContext UploadResult.Failure("Image file does not exist: ${imageFile.path}")
+                return@withContext Result.Error("Image file does not exist: ${imageFile.path}")
             }
+
+            Log.d(TAG, "Uploading: ${imageFile.name} (${imageFile.length() / 1024} KB)")
 
             // Build multipart request body
-            val requestBodyBuilder = MultipartBody.Builder()
+            val requestBody = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-
-            // Add image file
-            val imageRequestBody = imageFile.asRequestBody("image/jpeg".toMediaTypeOrNull())
-            requestBodyBuilder.addFormDataPart(
-                "file",
-                imageFile.name,
-                imageRequestBody
-            )
-
-            // Add form fields
-            if (inspectionId != null) {
-                requestBodyBuilder.addFormDataPart("inspection_id", inspectionId)
-            }
-            requestBodyBuilder.addFormDataPart("package_type", packageType)
-            requestBodyBuilder.addFormDataPart("category", category)
-
-            val requestBody = requestBodyBuilder.build()
+                .addFormDataPart(
+                    "file",
+                    imageFile.name,
+                    imageFile.asRequestBody("image/jpeg".toMediaTypeOrNull())
+                )
+                .addFormDataPart("package_type", packageType)
+                .addFormDataPart("category", category)
+                .build()
 
             // Build HTTP request
             val request = Request.Builder()
-                .url("$BASE_URL$UPLOAD_ENDPOINT")
+                .url("${BASE_URL}inspections/upload")
                 .post(requestBody)
                 .build()
 
-            Log.d(TAG, "Uploading image: ${imageFile.name} (${imageFile.length() / 1024} KB)")
-            Log.d(TAG, "Endpoint: $BASE_URL$UPLOAD_ENDPOINT")
+            Log.d(TAG, "POST ${BASE_URL}inspections/upload")
 
             // Execute request
             val response = client.newCall(request).execute()
 
             if (response.isSuccessful) {
                 val responseBody = response.body?.string() ?: "{}"
-                Log.d(TAG, "Upload successful: $responseBody")
-                
-                val json = JSONObject(responseBody)
-                UploadResult.Success(
-                    inspectionId = json.optString("inspection_id", ""),
-                    savedPath = json.optString("saved_path", ""),
-                    annotatedImagePath = json.optJSONObject("results")
-                        ?.optString("annotated_image", ""),
-                    responseJson = responseBody
-                )
+                Log.d(TAG, "✓ Upload successful")
+                Log.d(TAG, "Response: $responseBody")
+                Result.Success(responseBody)
             } else {
                 val errorBody = response.body?.string() ?: "Unknown error"
-                Log.e(TAG, "Upload failed with status ${response.code}: $errorBody")
-                UploadResult.Failure("Upload failed: ${response.code} - $errorBody")
+                Log.e(TAG, "✗ Upload failed: ${response.code}")
+                Log.e(TAG, "Error: $errorBody")
+                Result.Error("HTTP ${response.code}: $errorBody")
             }
         } catch (e: IOException) {
-            Log.e(TAG, "Network error during upload", e)
-            UploadResult.Failure("Network error: ${e.message}")
+            Log.e(TAG, "✗ Network error", e)
+            Result.Error("Network error: ${e.message}")
         } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error during upload", e)
-            UploadResult.Failure("Unexpected error: ${e.message}")
+            Log.e(TAG, "✗ Unexpected error", e)
+            Result.Error("Unexpected error: ${e.message}")
         }
     }
 
     /**
-     * Represents the result of an upload operation.
+     * Sealed class representing the upload result.
      */
-    sealed class UploadResult {
-        /**
-         * Upload succeeded.
-         *
-         * @param inspectionId The inspection ID returned by the backend
-         * @param savedPath The filename of the saved raw image
-         * @param annotatedImagePath Optional path to the annotated image with bounding boxes
-         * @param responseJson Full JSON response from the server
-         */
-        data class Success(
-            val inspectionId: String,
-            val savedPath: String,
-            val annotatedImagePath: String?,
-            val responseJson: String
-        ) : UploadResult()
-
-        /**
-         * Upload failed.
-         *
-         * @param errorMessage Description of what went wrong
-         */
-        data class Failure(val errorMessage: String) : UploadResult()
+    sealed class Result {
+        data class Success(val responseJson: String) : Result()
+        data class Error(val message: String) : Result()
     }
 }

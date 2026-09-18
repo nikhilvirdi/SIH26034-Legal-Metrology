@@ -87,6 +87,7 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.legalmetrology.inspector.camera.ArucoResult
 import com.legalmetrology.inspector.camera.ArucoScaleAnalyzer
+import com.legalmetrology.inspector.data.api.InspectionUploadService
 import com.legalmetrology.inspector.ui.theme.Amber500
 import com.legalmetrology.inspector.ui.theme.ArGlassPanel
 import com.legalmetrology.inspector.ui.theme.ArReticleTint
@@ -139,6 +140,9 @@ fun ScanScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
+
+    // ── Upload service ───────────────────────────────────────
+    val uploadService = remember { InspectionUploadService() }
 
     // ── Scan state machine ───────────────────────────────────
     var scanState by remember { mutableStateOf<ScanState>(ScanState.Searching) }
@@ -223,6 +227,31 @@ fun ScanScreen(
                                 "— ${photoFile.name}, " +
                                 "mmPerPx=${lockedState.mmPerPixel}"
                         )
+                        
+                        // Upload the image to backend (fire-and-forget, non-blocking)
+                        scope.launch {
+                            try {
+                                val uploadResult = uploadService.uploadInspectionImage(
+                                    imageFile = photoFile,
+                                    packageType = packageType,
+                                    category = category
+                                )
+                                
+                                when (uploadResult) {
+                                    is InspectionUploadService.Result.Success -> {
+                                        Log.d(TAG, "✓ Upload successful for ${photoFile.name}")
+                                        Log.d(TAG, "Response: ${uploadResult.responseJson}")
+                                    }
+                                    is InspectionUploadService.Result.Error -> {
+                                        Log.e(TAG, "✗ Upload failed for ${photoFile.name}: ${uploadResult.message}")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "✗ Upload exception for ${photoFile.name}", e)
+                            }
+                        }
+                        
+                        // Continue with photo capture flow immediately (don't wait for upload)
                         scope.launch {
                             photosCaptures++
                             delay(800L)

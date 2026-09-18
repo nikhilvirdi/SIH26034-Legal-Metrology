@@ -1,15 +1,16 @@
-# server/app/vision/detector.py
 from typing import List, Dict, Any
 from ultralytics import YOLO
 from app.config import settings
 
+# Load the model globally at startup so it remains in memory across API requests.
+# This prevents the massive overhead of reloading the .pt file on every scan.
 try:
     model = YOLO(str(settings.WEIGHTS_DIR / "yolov8_metrology.pt"))
 except FileNotFoundError:
+    print("Warning: yolov8_metrology.pt not found. Ensure the weights are placed in server/weights/")
     model = None
 
-def detect_fields(image_path: str) -> List[Dict[str, Any]]:
-    """
+
 def detect_fields(image_path: str) -> List[Dict[str, Any]]:
     """
     Runs YOLOv8 model inference over the high-res image to locate mandatory packaging fields.
