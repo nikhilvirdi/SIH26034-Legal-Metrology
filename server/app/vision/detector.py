@@ -1,20 +1,27 @@
+# server/app/vision/detector.py
 from typing import List, Dict, Any
 from ultralytics import YOLO
 from app.config import settings
 
-# Load the model globally at startup so it remains in memory across API requests.
-# This prevents the massive overhead of reloading the .pt file on every scan.
 try:
     model = YOLO(str(settings.WEIGHTS_DIR / "yolov8_metrology.pt"))
 except FileNotFoundError:
-    print("Warning: yolov8_metrology.pt not found. Ensure the weights are placed in server/weights/")
     model = None
 
-def detect_fields(image_path: str, mm_per_pixel: float) -> List[Dict[str, Any]]:
+def detect_fields(image_path: str) -> List[Dict[str, Any]]:
+    """
+def detect_fields(image_path: str) -> List[Dict[str, Any]]:
     """
     Runs YOLOv8 model inference over the high-res image to locate mandatory packaging fields.
-    Computes real-world physical height (mm) for each bounding box:
-        height_mm = bbox_height_px * mm_per_pixel
+    
+    Returns bounding boxes without physical measurements, as YOLO boxes include background
+    padding. Physical height must be calculated from the tight ink polygon in OCR step.
+    
+    Args:
+        image_path: Path to the high-resolution image file.
+        
+    Returns:
+        List of dictionaries with "field", "bbox", and "confidence".
     """
     if not model:
         raise RuntimeError("YOLO model weights are missing from the weights directory.")
@@ -33,16 +40,10 @@ def detect_fields(image_path: str, mm_per_pixel: float) -> List[Dict[str, Any]]:
         # Map class ID to the string name (e.g., "mrp", "net_quantity")
         field_name = model.names[cls_id]
 
-        # Calculate dimensions
-        height_px = y2 - y1
-        height_mm = round(height_px * mm_per_pixel, 2)
-
         detected_fields.append({
             "field": field_name,
             "bbox": [int(x1), int(y1), int(x2), int(y2)],
-            "confidence": round(confidence, 4),
-            "height_px": int(height_px),
-            "height_mm": height_mm
+            "confidence": round(confidence, 4)
         })
 
     return detected_fields
