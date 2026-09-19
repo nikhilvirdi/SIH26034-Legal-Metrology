@@ -2,14 +2,20 @@ package com.legalmetrology.inspector.ui.screens.scan
 
 import android.Manifest
 import android.content.Context
+import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.os.Build
-import androidx.compose.animation.AnimatedContent
+import android.util.Log
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.InfiniteTransition
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -24,6 +30,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,7 +48,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -53,7 +60,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -63,20 +69,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
-import com.legalmetrology.inspector.ar.ArScaleManager
+import com.legalmetrology.inspector.camera.ArucoResult
+import com.legalmetrology.inspector.camera.ArucoScaleAnalyzer
+import com.legalmetrology.inspector.data.api.InspectionUploadService
+import com.legalmetrology.inspector.ui.theme.Amber500
 import com.legalmetrology.inspector.ui.theme.ArGlassPanel
 import com.legalmetrology.inspector.ui.theme.ArReticleTint
 import com.legalmetrology.inspector.ui.theme.ArSearchTint
@@ -85,32 +97,36 @@ import com.legalmetrology.inspector.ui.theme.Indigo500
 import com.legalmetrology.inspector.ui.theme.Navy900
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
+import java.util.concurrent.Executors
+
+private const val TAG = "ScanScreen"
 
 /**
- * ScanScreen — the core AR scanning experience.
+ * ScanScreen — ArUco marker-based scanning with perspective-tilt protection.
  *
- * THREE STATES:
- *   1. SEARCHING — ARCore is detecting surfaces. Pulsing indigo reticle.
- *   2. LOCKED    — AR surface detected & stable. Green ring, haptic feedback.
- *   3. CAPTURED  — Photo taken. Brief green flash animation.
+ * ## State machine
+ * ```
+ *  ┌────────────┐  marker visible       ┌─────────────┐
+ *  │  Searching │─────(geometry ok)────▶│   Locked    │
+ *  └────────────┘                       └─────────────┘
+ *        ▲              marker visible        │ marker lost
+ *        │          ──(geometry bad)──▶  ┌──────────┐
+ *        │          ◀──(500ms debounce)──│  Tilted  │
+ *        │                               └──────────┘
+ *        └──────────────(500ms debounce)──────────────
+ * ```
  *
- * AR INTEGRATION:
- * We use SceneView's ArSceneView (a Compose-compatible wrapper around ARCore).
- * The ArScaleManager processes each frame to derive the mm/px ratio.
+ * The **500 ms debounce** on both Locked→Searching and Tilted→Searching
+ * prevents the reticle from flickering due to micro hand-tremors.
  *
- * IMPORTANT: This screen requires CAMERA permission.
- * Accompanist Permissions handles the runtime request.
- *
- * COIN FALLBACK:
- * If ARCore is unavailable (device not supported), the user is prompted to
- * place a 1-rupee coin (22mm diameter) in the frame before capturing.
- * The coin's pixel size lets us derive the same mm/px ratio without ARCore.
- *
- * TODO — BACKEND INTEGRATION:
- * After capture, the photo files + ArScaleMetadata are bundled and sent
- * to the backend via InspectionRepository.submitInspection().
- * For now, a mock inspectionId is generated locally.
+ * ## CameraX use cases
+ * | Use case       | Purpose                                    |
+ * |----------------|--------------------------------------------|
+ * | Preview        | Real-time viewfinder via PreviewView       |
+ * | ImageAnalysis  | ArUco detection at 30 fps (latest-frame)   |
+ * | ImageCapture   | High-quality JPEG on shutter press         |
  */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -121,105 +137,224 @@ fun ScanScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val cameraPermission = rememberPermissionState(Manifest.permission.CAMERA)
 
-    // Scan state machine
+    // ── Upload service ───────────────────────────────────────
+    val uploadService = remember { InspectionUploadService() }
+
+    // ── Scan state machine ───────────────────────────────────
     var scanState by remember { mutableStateOf<ScanState>(ScanState.Searching) }
     var photosCaptures by remember { mutableIntStateOf(0) }
-    val maxPhotos = 3 // Front, back, side
+    val maxPhotos = 3
 
-    // AR tracking quality (would come from ArScaleManager in real integration)
-    // For demo: simulate tracking lock after 3 seconds
-    var trackingQuality by remember {
-        mutableStateOf<ArScaleManager.TrackingQuality>(ArScaleManager.TrackingQuality.Searching)
-    }
+    // ── CameraX handles ──────────────────────────────────────
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
 
-    LaunchedEffect(Unit) {
-        // Request camera permission
-        if (!cameraPermission.status.isGranted) {
-            cameraPermission.launchPermissionRequest()
-        }
+    // ── Latest result from the analyzer thread ───────────────
+    // Written from the CameraX background thread; read on the main thread.
+    // Using mutableStateOf so Compose re-reads it automatically.
+    var latestResult by remember { mutableStateOf<ArucoResult>(ArucoResult.NotFound) }
 
-        // Simulate AR tracking lock for demo
-        // TODO: Replace with actual ArScaleManager.trackingQuality.collectAsState()
-        // when SceneView ArSceneView composable is integrated
-        delay(3000L)
-        trackingQuality = ArScaleManager.TrackingQuality.Tracking(0.42, 0.089)
-        scanState = ScanState.Locked(
-            distanceMeters = 0.42,
-            mmPerPixel = 0.089,
-            labelAreaCm2 = 320.0
-        )
-    }
+    // ── Debounced state transitions ──────────────────────────
+    // When the analyzer reports NotFound or Tilted we don't immediately drop
+    // a Valid lock — we wait 500 ms first.  This smooths out micro-occlusions
+    // and hand-tremors without making the UI feel sluggish.
+    LaunchedEffect(latestResult) {
+        when (val result = latestResult) {
 
-    fun capturePhoto() {
-        scope.launch {
-            // Haptic feedback on capture
-            vibrate(context)
+            is ArucoResult.Valid -> {
+                // Immediate promotion to Locked; update mmPerPixel live.
+                if (scanState is ScanState.Searching || scanState is ScanState.Tilted) {
+                    vibrate(context)
+                }
+                scanState = ScanState.Locked(result.mmPerPixel)
+            }
 
-            scanState = ScanState.Captured
-            photosCaptures++
+            is ArucoResult.Tilted -> {
+                if (scanState is ScanState.Locked) {
+                    // Give the user 500 ms to correct the angle before we drop lock.
+                    delay(500L)
+                }
+                // Only transition if the result hasn't changed back to Valid.
+                if (latestResult is ArucoResult.Tilted) {
+                    scanState = ScanState.Tilted
+                }
+            }
 
-            delay(800L)
-
-            if (photosCaptures >= maxPhotos) {
-                // All photos captured — proceed to review
-                // TODO: Pass real inspection ID from repository when wiring backend
-                val mockInspectionId = UUID.randomUUID().toString()
-                onProceedToReview(mockInspectionId)
-            } else {
-                // Reset for next shot
-                scanState = ScanState.Locked(0.42, 0.089, 320.0)
+            is ArucoResult.NotFound -> {
+                if (scanState is ScanState.Locked || scanState is ScanState.Tilted) {
+                    delay(500L)
+                }
+                if (latestResult is ArucoResult.NotFound) {
+                    scanState = ScanState.Searching
+                }
             }
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Navy900)) {
-
+    LaunchedEffect(Unit) {
         if (!cameraPermission.status.isGranted) {
-            // Camera permission not granted
+            cameraPermission.launchPermissionRequest()
+        }
+    }
+
+    // ── Capture logic ────────────────────────────────────────
+    fun capturePhoto() {
+        val capture = imageCapture ?: return
+        val lockedState = scanState as? ScanState.Locked ?: return
+
+        scope.launch {
+            vibrate(context)
+            scanState = ScanState.Captured
+
+            val photoFile = File(
+                context.cacheDir,
+                "inspection_photo_${photosCaptures}_${System.currentTimeMillis()}.jpg"
+            )
+            val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
+
+            capture.takePicture(
+                outputOptions,
+                ContextCompat.getMainExecutor(context),
+                object : ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                        Log.d(
+                            TAG,
+                            "Captured photo ${photosCaptures + 1}/$maxPhotos " +
+                                "— ${photoFile.name}, " +
+                                "mmPerPx=${lockedState.mmPerPixel}"
+                        )
+                        
+                        // Upload the image to backend (fire-and-forget, non-blocking)
+                        scope.launch {
+                            try {
+                                val uploadResult = uploadService.uploadInspectionImage(
+                                    imageFile = photoFile,
+                                    packageType = packageType,
+                                    category = category
+                                )
+                                
+                                when (uploadResult) {
+                                    is InspectionUploadService.Result.Success -> {
+                                        Log.d(TAG, "✓ Upload successful for ${photoFile.name}")
+                                        Log.d(TAG, "Response: ${uploadResult.responseJson}")
+                                    }
+                                    is InspectionUploadService.Result.Error -> {
+                                        Log.e(TAG, "✗ Upload failed for ${photoFile.name}: ${uploadResult.message}")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "✗ Upload exception for ${photoFile.name}", e)
+                            }
+                        }
+                        
+                        // Continue with photo capture flow immediately (don't wait for upload)
+                        scope.launch {
+                            photosCaptures++
+                            delay(800L)
+                            if (photosCaptures >= maxPhotos) {
+                                onProceedToReview(UUID.randomUUID().toString())
+                            } else {
+                                // Re-enter locked state if marker still valid.
+                                val currentResult = latestResult
+                                scanState = if (currentResult is ArucoResult.Valid) {
+                                    ScanState.Locked(currentResult.mmPerPixel)
+                                } else {
+                                    ScanState.Searching
+                                }
+                            }
+                        }
+                    }
+
+                    override fun onError(exception: ImageCaptureException) {
+                        Log.e(TAG, "Photo capture failed", exception)
+                        scanState = ScanState.Searching
+                    }
+                }
+            )
+        }
+    }
+
+    // ── Root layout ──────────────────────────────────────────
+    Box(modifier = Modifier.fillMaxSize().background(Navy900)) {
+        if (!cameraPermission.status.isGranted) {
             CameraPermissionRequest(
                 onRequestPermission = { cameraPermission.launchPermissionRequest() }
             )
         } else {
-            // ─── AR Camera View ───
-            // TODO: Replace this placeholder with actual SceneView ArSceneView composable:
-            //
-            //   ArSceneView(
-            //     modifier = Modifier.fillMaxSize(),
-            //     onSessionCreated = { session -> arScaleManager.initSession(session) },
-            //     onFrame = { arFrame ->
-            //       val hitResults = arFrame.hitTest(0.5f, 0.5f)
-            //       arScaleManager.onArFrame(arFrame, hitResults)
-            //     }
-            //   )
-            //
-            // The SceneView library version 2.2.1 provides ArSceneView as a composable.
-            // Integration: https://github.com/SceneView/sceneview-android
 
-            // Camera placeholder (dark + grid lines to simulate viewfinder)
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF0D1117))
-            ) {
-                // Grid lines (rule of thirds guide)
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val thirdW = size.width / 3f
-                    val thirdH = size.height / 3f
-                    val lineColor = Color.White.copy(alpha = 0.08f)
-                    drawLine(lineColor, Offset(thirdW, 0f), Offset(thirdW, size.height), 1f)
-                    drawLine(lineColor, Offset(thirdW * 2, 0f), Offset(thirdW * 2, size.height), 1f)
-                    drawLine(lineColor, Offset(0f, thirdH), Offset(size.width, thirdH), 1f)
-                    drawLine(lineColor, Offset(0f, thirdH * 2), Offset(size.width, thirdH * 2), 1f)
-                }
+            // ── CameraX PreviewView ──────────────────────────
+            AndroidView(
+                factory = { ctx ->
+                    PreviewView(ctx).also { preview ->
+                        previewView = preview
+
+                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                        cameraProviderFuture.addListener({
+                            val cameraProvider = cameraProviderFuture.get()
+
+                            // Preview
+                            val previewUseCase = Preview.Builder().build().also {
+                                it.setSurfaceProvider(preview.surfaceProvider)
+                            }
+
+                            // ImageAnalysis — single background thread, drop old frames
+                            val analysisUseCase = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                .build()
+                                .also { analysis ->
+                                    analysis.setAnalyzer(
+                                        Executors.newSingleThreadExecutor(),
+                                        ArucoScaleAnalyzer { result ->
+                                            // Callback is on the analyzer thread — update
+                                            // mutableStateOf (thread-safe for Compose).
+                                            latestResult = result
+                                        }
+                                    )
+                                }
+
+                            // ImageCapture
+                            val imageCaptureUseCase = ImageCapture.Builder()
+                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                                .build()
+                            imageCapture = imageCaptureUseCase
+
+                            try {
+                                cameraProvider.unbindAll()
+                                cameraProvider.bindToLifecycle(
+                                    lifecycleOwner,
+                                    CameraSelector.DEFAULT_BACK_CAMERA,
+                                    previewUseCase,
+                                    analysisUseCase,
+                                    imageCaptureUseCase
+                                )
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Camera binding failed", e)
+                            }
+                        }, ContextCompat.getMainExecutor(ctx))
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Rule-of-thirds guide lines
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val thirdW = size.width / 3f
+                val thirdH = size.height / 3f
+                val lineColor = Color.White.copy(alpha = 0.08f)
+                drawLine(lineColor, Offset(thirdW, 0f),          Offset(thirdW, size.height),      1f)
+                drawLine(lineColor, Offset(thirdW * 2, 0f),      Offset(thirdW * 2, size.height),  1f)
+                drawLine(lineColor, Offset(0f, thirdH),          Offset(size.width, thirdH),        1f)
+                drawLine(lineColor, Offset(0f, thirdH * 2),      Offset(size.width, thirdH * 2),    1f)
             }
 
-            // ─── AR Overlays (stacked on top of camera view) ───
+            // Reticle + tilt warning overlay
             ArScanOverlay(scanState = scanState)
 
-            // ─── Top HUD ───
+            // Top status bar
             TopHud(
                 packageType = packageType,
                 category = category,
@@ -227,14 +362,23 @@ fun ScanScreen(
                 onBack = onBack
             )
 
-            // ─── Bottom Controls ───
+            // Bottom shutter + progress
             BottomControls(
                 scanState = scanState,
                 photosCaptures = photosCaptures,
                 maxPhotos = maxPhotos,
-                onCapture = { capturePhoto() },
+                onCapture = ::capturePhoto,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            previewView?.let {
+                val future = ProcessCameraProvider.getInstance(context)
+                if (future.isDone) future.get().unbindAll()
+            }
         }
     }
 }
@@ -243,28 +387,43 @@ fun ScanScreen(
 // Scan State
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * UI-level state for the scan screen.  Note that this is *separate* from
+ * [ArucoResult]: the UI state is debounced and drives animations, whereas
+ * [ArucoResult] is the raw per-frame output of the analyzer.
+ */
 sealed class ScanState {
+    /** No marker in frame — show pulsing indigo reticle. */
     object Searching : ScanState()
-    data class Locked(
-        val distanceMeters: Double,
-        val mmPerPixel: Double,
-        val labelAreaCm2: Double
-    ) : ScanState()
+
+    /**
+     * Marker detected but geometry fails perspective check — show amber
+     * warning reticle and tilt-correction hint.  Capture is blocked.
+     */
+    object Tilted : ScanState()
+
+    /**
+     * Marker detected and geometry is good — show green lock ring and
+     * enable the shutter button.
+     *
+     * @param mmPerPixel Live-updated scale ratio.
+     */
+    data class Locked(val mmPerPixel: Double) : ScanState()
+
+    /** Shutter pressed — brief white-flash animation then advance. */
     object Captured : ScanState()
 }
 
 // ─────────────────────────────────────────────────────────────
-// AR Scan Overlay (reticle + pulse ring + lock indicator)
+// AR Scan Overlay
 // ─────────────────────────────────────────────────────────────
 
 @Composable
 private fun ArScanOverlay(scanState: ScanState) {
     val infiniteTransition = rememberInfiniteTransition(label = "ar_pulse")
 
-    // Pulsing animation for "searching" state
     val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.85f,
-        targetValue = 1.15f,
+        initialValue = 0.85f, targetValue = 1.15f,
         animationSpec = infiniteRepeatable(
             animation = tween(900, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -272,10 +431,18 @@ private fun ArScanOverlay(scanState: ScanState) {
         label = "pulse_scale"
     )
 
-    // Rotating scan line for "searching" state
+    // Amber pulse for the Tilted state — slightly slower for a "warning" feel.
+    val tiltPulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.90f, targetValue = 1.10f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "tilt_pulse_scale"
+    )
+
     val scanRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
+        initialValue = 0f, targetValue = 360f,
         animationSpec = infiniteRepeatable(
             animation = tween(2000, easing = LinearEasing)
         ),
@@ -283,9 +450,10 @@ private fun ArScanOverlay(scanState: ScanState) {
     )
 
     val reticleColor = when (scanState) {
-        is ScanState.Locked  -> ArReticleTint  // Emerald green when locked
-        is ScanState.Captured -> Emerald500
-        else                  -> ArSearchTint   // Indigo when searching
+        is ScanState.Locked   -> ArReticleTint   // green
+        is ScanState.Captured -> Emerald500       // green flash
+        is ScanState.Tilted   -> Amber500         // amber warning
+        else                  -> ArSearchTint     // indigo searching
     }
 
     val reticleAlpha by animateFloatAsState(
@@ -298,13 +466,10 @@ private fun ArScanOverlay(scanState: ScanState) {
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        // Outer pulse ring (searching only)
+
+        // ── Outer pulse ring — Searching ────────────────────
         if (scanState is ScanState.Searching) {
-            Canvas(
-                modifier = Modifier
-                    .size(220.dp)
-                    .alpha(0.4f)
-            ) {
+            Canvas(modifier = Modifier.size(220.dp).alpha(0.4f)) {
                 drawCircle(
                     color = ArSearchTint,
                     radius = size.minDimension / 2f * pulseScale,
@@ -313,66 +478,100 @@ private fun ArScanOverlay(scanState: ScanState) {
             }
         }
 
-        // Main reticle: corner brackets
+        // ── Outer pulse ring — Tilted (amber, faster) ───────
+        if (scanState is ScanState.Tilted) {
+            Canvas(modifier = Modifier.size(220.dp).alpha(0.5f)) {
+                drawCircle(
+                    color = Amber500,
+                    radius = size.minDimension / 2f * tiltPulseScale,
+                    style = Stroke(width = 2.5.dp.toPx())
+                )
+            }
+        }
+
+        // ── Corner-bracket reticle (all states) ─────────────
         Canvas(
-            modifier = Modifier
-                .size(180.dp)
-                .alpha(reticleAlpha)
+            modifier = Modifier.size(180.dp).alpha(reticleAlpha)
         ) {
-            val cornerLen = size.width * 0.2f
+            val cornerLen   = size.width * 0.2f
             val strokeWidth = 3.dp.toPx()
-            val padding = 0f
+            val p           = 0f   // padding
 
-            // Top-left corner
-            drawLine(reticleColor, Offset(padding, padding), Offset(padding + cornerLen, padding), strokeWidth, StrokeCap.Round)
-            drawLine(reticleColor, Offset(padding, padding), Offset(padding, padding + cornerLen), strokeWidth, StrokeCap.Round)
+            // Top-left
+            drawLine(reticleColor, Offset(p, p), Offset(p + cornerLen, p), strokeWidth, StrokeCap.Round)
+            drawLine(reticleColor, Offset(p, p), Offset(p, p + cornerLen), strokeWidth, StrokeCap.Round)
+            // Top-right
+            drawLine(reticleColor, Offset(size.width - p, p), Offset(size.width - p - cornerLen, p), strokeWidth, StrokeCap.Round)
+            drawLine(reticleColor, Offset(size.width - p, p), Offset(size.width - p, p + cornerLen), strokeWidth, StrokeCap.Round)
+            // Bottom-left
+            drawLine(reticleColor, Offset(p, size.height - p), Offset(p + cornerLen, size.height - p), strokeWidth, StrokeCap.Round)
+            drawLine(reticleColor, Offset(p, size.height - p), Offset(p, size.height - p - cornerLen), strokeWidth, StrokeCap.Round)
+            // Bottom-right
+            drawLine(reticleColor, Offset(size.width - p, size.height - p), Offset(size.width - p - cornerLen, size.height - p), strokeWidth, StrokeCap.Round)
+            drawLine(reticleColor, Offset(size.width - p, size.height - p), Offset(size.width - p, size.height - p - cornerLen), strokeWidth, StrokeCap.Round)
 
-            // Top-right corner
-            drawLine(reticleColor, Offset(size.width - padding, padding), Offset(size.width - padding - cornerLen, padding), strokeWidth, StrokeCap.Round)
-            drawLine(reticleColor, Offset(size.width - padding, padding), Offset(size.width - padding, padding + cornerLen), strokeWidth, StrokeCap.Round)
-
-            // Bottom-left corner
-            drawLine(reticleColor, Offset(padding, size.height - padding), Offset(padding + cornerLen, size.height - padding), strokeWidth, StrokeCap.Round)
-            drawLine(reticleColor, Offset(padding, size.height - padding), Offset(padding, size.height - padding - cornerLen), strokeWidth, StrokeCap.Round)
-
-            // Bottom-right corner
-            drawLine(reticleColor, Offset(size.width - padding, size.height - padding), Offset(size.width - padding - cornerLen, size.height - padding), strokeWidth, StrokeCap.Round)
-            drawLine(reticleColor, Offset(size.width - padding, size.height - padding), Offset(size.width - padding, size.height - padding - cornerLen), strokeWidth, StrokeCap.Round)
-
-            // Scanning arc (searching state)
+            // Scanning arc (Searching only)
             if (scanState is ScanState.Searching) {
                 drawArc(
                     color = ArSearchTint.copy(alpha = 0.6f),
-                    startAngle = scanRotation,
-                    sweepAngle = 90f,
-                    useCenter = false,
-                    topLeft = Offset(padding + strokeWidth, padding + strokeWidth),
-                    size = Size(size.width - padding * 2 - strokeWidth * 2, size.height - padding * 2 - strokeWidth * 2),
+                    startAngle = scanRotation, sweepAngle = 90f, useCenter = false,
+                    topLeft = Offset(p + strokeWidth, p + strokeWidth),
+                    size = Size(
+                        size.width  - p * 2 - strokeWidth * 2,
+                        size.height - p * 2 - strokeWidth * 2
+                    ),
                     style = Stroke(width = 2.dp.toPx())
                 )
             }
         }
 
-        // Locked: full circle lock indicator
+        // ── Solid lock ring (Locked) ─────────────────────────
         if (scanState is ScanState.Locked) {
             Canvas(modifier = Modifier.size(200.dp)) {
-                drawCircle(
-                    color = ArReticleTint.copy(alpha = 0.15f),
-                    radius = size.minDimension / 2f
-                )
-                drawCircle(
-                    color = ArReticleTint,
-                    radius = size.minDimension / 2f,
-                    style = Stroke(width = 2.dp.toPx())
-                )
+                drawCircle(color = ArReticleTint.copy(alpha = 0.15f), radius = size.minDimension / 2f)
+                drawCircle(color = ArReticleTint, radius = size.minDimension / 2f, style = Stroke(width = 2.dp.toPx()))
             }
         }
 
-        // Captured: flash overlay
+        // ── Tilt warning banner ──────────────────────────────
+        if (scanState is ScanState.Tilted) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(top = 220.dp)      // sit below the reticle
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = Amber500.copy(alpha = 0.15f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Amber500,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Marker tilted! Hold phone flat\nand parallel to the label.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Amber500,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Capture flash (Captured) ─────────────────────────
         AnimatedVisibility(
             visible = scanState is ScanState.Captured,
             enter = fadeIn(tween(50)),
-            exit = fadeOut(tween(600))
+            exit  = fadeOut(tween(600))
         ) {
             Box(
                 modifier = Modifier
@@ -405,16 +604,15 @@ private fun TopHud(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Back button
             IconButton(
                 onClick = onBack,
-                modifier = Modifier
-                    .background(ArGlassPanel, CircleShape)
-                    .size(40.dp)
+                modifier = Modifier.background(ArGlassPanel, CircleShape).size(40.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
             }
 
-            // Package type + category badge
+            // Package type · category badge
             Card(
                 colors = CardDefaults.cardColors(containerColor = ArGlassPanel),
                 shape = RoundedCornerShape(20.dp)
@@ -436,48 +634,42 @@ private fun TopHud(
                 }
             }
 
-            // AR status indicator
+            // Status pill — colour-coded per state
+            val pillBackground = when (scanState) {
+                is ScanState.Locked   -> ArReticleTint.copy(alpha = 0.2f)
+                is ScanState.Captured -> Emerald500.copy(alpha = 0.2f)
+                is ScanState.Tilted   -> Amber500.copy(alpha = 0.2f)
+                else                  -> ArGlassPanel
+            }
+            val dotColor = when (scanState) {
+                is ScanState.Locked   -> ArReticleTint
+                is ScanState.Captured -> Emerald500
+                is ScanState.Tilted   -> Amber500
+                else                  -> Color.Yellow
+            }
+            val pillLabel = when (scanState) {
+                is ScanState.Locked   -> "Marker Locked"
+                is ScanState.Captured -> "Captured"
+                is ScanState.Tilted   -> "Tilted"
+                else                  -> "Searching..."
+            }
+
             Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = when (scanState) {
-                        is ScanState.Locked   -> ArReticleTint.copy(alpha = 0.2f)
-                        is ScanState.Captured -> Emerald500.copy(alpha = 0.2f)
-                        else                   -> ArGlassPanel
-                    }
-                ),
+                colors = CardDefaults.cardColors(containerColor = pillBackground),
                 shape = RoundedCornerShape(20.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .background(
-                                when (scanState) {
-                                    is ScanState.Locked   -> ArReticleTint
-                                    is ScanState.Captured -> Emerald500
-                                    else                   -> Color.Yellow
-                                },
-                                CircleShape
-                            )
-                    )
+                    Box(modifier = Modifier.size(8.dp).background(dotColor, CircleShape))
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = when (scanState) {
-                            is ScanState.Locked   -> "AR Locked"
-                            is ScanState.Captured -> "Captured"
-                            else                   -> "Searching..."
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White
-                    )
+                    Text(pillLabel, style = MaterialTheme.typography.labelSmall, color = Color.White)
                 }
             }
         }
 
-        // Distance + scale readout (only when locked)
+        // Scale readout (Locked state only)
         if (scanState is ScanState.Locked) {
             Spacer(Modifier.height(8.dp))
             Card(
@@ -486,14 +678,13 @@ private fun TopHud(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    MetricReadout("Distance", "${String.format("%.2f", scanState.distanceMeters)}m")
-                    MetricReadout("Scale", "${String.format("%.3f", scanState.mmPerPixel)}mm/px")
-                    MetricReadout("Label Area", "${scanState.labelAreaCm2.toInt()}cm²")
+                    MetricReadout(
+                        label = "Scale",
+                        value = "${String.format("%.4f", scanState.mmPerPixel)} mm/px"
+                    )
                 }
             }
         }
@@ -529,70 +720,82 @@ private fun BottomControls(
             .padding(bottom = 32.dp, start = 24.dp, end = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Photo progress indicators
+        // Progress dots
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(bottom = 16.dp)
         ) {
-            (0 until maxPhotos).forEach { i ->
+            repeat(maxPhotos) { i ->
                 PhotoProgressDot(
-                    label = photoLabels.getOrElse(i) { "Photo ${i+1}" },
+                    label = photoLabels.getOrElse(i) { "Photo ${i + 1}" },
                     isCaptured = i < photosCaptures,
-                    isCurrent = i == photosCaptures
+                    isCurrent  = i == photosCaptures
                 )
             }
         }
 
-        // Instruction text
+        // Contextual instruction text
+        val instructionText = when {
+            scanState is ScanState.Tilted ->
+                "Hold the phone directly above and parallel to the label."
+            scanState is ScanState.Searching && photosCaptures == 0 ->
+                "Place the 40 mm ArUco marker near the package label."
+            scanState is ScanState.Searching ->
+                "Place the ArUco marker near the package."
+            scanState is ScanState.Locked && photosCaptures == 0 ->
+                "Marker locked ✓  Capture the FRONT of the package."
+            scanState is ScanState.Locked && photosCaptures == 1 ->
+                "Now capture the BACK of the package."
+            scanState is ScanState.Locked && photosCaptures == 2 ->
+                "Finally, capture the SIDE panel."
+            else -> "Processing…"
+        }
+        val instructionColor = if (scanState is ScanState.Tilted) Amber500 else Color.White.copy(alpha = 0.85f)
+        val instructionBg    = if (scanState is ScanState.Tilted) Amber500.copy(alpha = 0.15f) else ArGlassPanel
+
         Text(
-            text = when {
-                scanState is ScanState.Searching ->
-                    "Point camera at the package — detecting surface…"
-                scanState is ScanState.Locked && photosCaptures == 0 ->
-                    "Surface locked ✓  Capture the FRONT of the package"
-                scanState is ScanState.Locked && photosCaptures == 1 ->
-                    "Now capture the BACK of the package"
-                scanState is ScanState.Locked && photosCaptures == 2 ->
-                    "Finally, capture the SIDE panel"
-                else -> "Processing…"
-            },
+            text = instructionText,
             style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.85f),
+            color = instructionColor,
+            textAlign = TextAlign.Center,
             modifier = Modifier
-                .background(ArGlassPanel, RoundedCornerShape(8.dp))
+                .background(instructionBg, RoundedCornerShape(8.dp))
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         )
 
         Spacer(Modifier.height(20.dp))
 
-        // Shutter button
+        // Shutter button — disabled when not Locked
+        val isCaptureable = scanState is ScanState.Locked
         Box(contentAlignment = Alignment.Center) {
-            // Outer ring
+            // Outer glow ring
             Box(
                 modifier = Modifier
                     .size(80.dp)
                     .background(
-                        if (scanState is ScanState.Locked) ArReticleTint.copy(0.3f)
-                        else Color.White.copy(0.1f),
+                        when {
+                            isCaptureable              -> ArReticleTint.copy(alpha = 0.3f)
+                            scanState is ScanState.Tilted -> Amber500.copy(alpha = 0.2f)
+                            else                       -> Color.White.copy(alpha = 0.1f)
+                        },
                         CircleShape
                     )
             )
-            // Inner shutter button
             Button(
-                onClick = onCapture,
-                enabled = scanState is ScanState.Locked,
-                modifier = Modifier.size(64.dp),
-                shape = CircleShape,
+                onClick   = onCapture,
+                enabled   = isCaptureable,
+                modifier  = Modifier.size(64.dp),
+                shape     = CircleShape,
                 contentPadding = PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (scanState is ScanState.Locked) Color.White else Color.White.copy(0.4f),
-                    disabledContainerColor = Color.White.copy(0.3f)
+                colors    = ButtonDefaults.buttonColors(
+                    containerColor         = if (isCaptureable) Color.White else Color.White.copy(alpha = 0.4f),
+                    disabledContainerColor = Color.White.copy(alpha = 0.3f)
                 )
             ) {
                 Icon(
-                    if (scanState is ScanState.Captured) Icons.Default.Check else Icons.Default.CameraAlt,
+                    imageVector  = if (scanState is ScanState.Captured) Icons.Default.Check else Icons.Default.CameraAlt,
                     contentDescription = "Capture",
-                    tint = if (scanState is ScanState.Locked) Navy900 else Color.White.copy(0.6f),
+                    tint = if (isCaptureable) Navy900 else Color.White.copy(alpha = 0.6f),
                     modifier = Modifier.size(28.dp)
                 )
             }
@@ -610,7 +813,7 @@ private fun PhotoProgressDot(label: String, isCaptured: Boolean, isCurrent: Bool
                     when {
                         isCaptured -> Emerald500
                         isCurrent  -> Color.White
-                        else        -> Color.White.copy(0.3f)
+                        else       -> Color.White.copy(alpha = 0.3f)
                     },
                     CircleShape
                 )
@@ -619,14 +822,14 @@ private fun PhotoProgressDot(label: String, isCaptured: Boolean, isCurrent: Bool
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (isCurrent) Color.White else Color.White.copy(0.5f),
+            color = if (isCurrent) Color.White else Color.White.copy(alpha = 0.5f),
             fontSize = 9.sp
         )
     }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Camera permission request
+// Camera permission gate
 // ─────────────────────────────────────────────────────────────
 
 @Composable
@@ -641,15 +844,23 @@ private fun CameraPermissionRequest(onRequestPermission: () -> Unit) {
         ) {
             Icon(Icons.Default.Camera, null, modifier = Modifier.size(64.dp), tint = Indigo500)
             Spacer(Modifier.height(16.dp))
-            Text("Camera Required", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                "Camera Required",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Camera access is needed to inspect product labels. Grant access to proceed.",
+                "Camera access is needed to inspect product labels.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(24.dp))
-            Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Indigo500)) {
+            Button(
+                onClick = onRequestPermission,
+                colors  = ButtonDefaults.buttonColors(containerColor = Indigo500)
+            ) {
                 Text("Grant Camera Permission")
             }
         }
@@ -657,18 +868,17 @@ private fun CameraPermissionRequest(onRequestPermission: () -> Unit) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Haptic feedback helper
+// Haptic helper
 // ─────────────────────────────────────────────────────────────
 
 private fun vibrate(context: Context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-        val vibrator = vibratorManager.defaultVibrator
-        vibrator.vibrate(VibrationEffect.createOneShot(80, VibrationEffect.DEFAULT_AMPLITUDE))
+        val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+        vm.defaultVibrator.vibrate(
+            VibrationEffect.createOneShot(80, VibrationEffect.DEFAULT_AMPLITUDE)
+        )
     } else {
         @Suppress("DEPRECATION")
-        val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-        @Suppress("DEPRECATION")
-        vibrator.vibrate(80)
+        (context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator).vibrate(80)
     }
 }

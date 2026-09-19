@@ -30,12 +30,6 @@
         android:name="android.hardware.camera.autofocus"
         android:required="false" />
 
-    <!-- ARCore: optional — app gracefully degrades to coin-fallback if unavailable -->
-    <!-- ar.required="false" means we don't block non-ARCore devices from installing -->
-    <uses-feature
-        android:name="android.hardware.camera.ar"
-        android:required="false" />
-
     <application
         android:name=".LegalMetrologyApp"
         android:allowBackup="true"
@@ -46,13 +40,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.LegalMetrology"
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
-
-        <!-- ARCore: declare Play Services for AR as optional dependency -->
-        <!-- This metadata tells the Play Store whether ARCore is required or optional -->
-        <meta-data
-            android:name="com.google.ar.core"
-            android:value="optional" />
 
         <!-- Main Activity (single-activity architecture with Compose Navigation) -->
         <activity

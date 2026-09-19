@@ -1,0 +1,214 @@
+# ============================================================
+# Android & Gradle Build Files
+# ============================================================
+
+# Gradle files
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Gradle cache
+**/build/
+/buildOutputs/
+
+# Gradle daemon
+.gradle
+gradle-app.setting
+
+# ============================================================
+# Local Configuration Files (DO NOT COMMIT)
+# ============================================================
+
+# Android SDK location and other local configuration
+local.properties
+
+# NDK
+ndk.dir
+sdk.dir
+
+# ============================================================
+# IntelliJ IDEA / Android Studio
+# ============================================================
+
+.idea/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/modules.xml
+.idea/vcs.xml
+.idea/navEditor.xml
+.idea/runConfigurations.xml
+.idea/deploymentTargetDropDown.xml
+.idea/misc.xml
+.idea/.name
+
+# Android Studio Navigation editor temp files
+.navigation/
+
+# IntelliJ module files
+*.iml
+*.iws
+*.ipr
+
+# Android Studio captures folder
+captures/
+
+# ============================================================
+# OS-Specific Files
+# ============================================================
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+Icon
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.directory
+.fuse_hidden*
+.nfs*
+
+# ============================================================
+# Android Keystore Files (CRITICAL - Prevent Key Leakage)
+# ============================================================
+
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+keystore.properties
+signing.properties
+
+# ============================================================
+# Log Files
+# ============================================================
+
+*.log
+*.log.*
+/log/
+/logs/
+
+# ============================================================
+# Android Lint
+# ============================================================
+
+lint/
+lint-results.html
+lint-results.xml
+lint-report.html
+
+# ============================================================
+# Android Profiler
+# ============================================================
+
+*.hprof
+*.trace
+
+# ============================================================
+# External Native Build
+# ============================================================
+
+.externalNativeBuild/
+.cxx/
+*.so
+
+# ============================================================
+# Google Services
+# ============================================================
+
+# Do NOT commit these - contains API keys
+# google-services.json
+# firebase-adminsdk.json
+
+# ============================================================
+# Miscellaneous
+# ============================================================
+
+# Backup files
+*.bak
+*.swp
+*.swo
+*~.nib
+
+# Temporary files
+*.tmp
+*.temp
+.temp/
+tmp/
+
+# Freeline (abandoned build tool)
+freeline.py
+freeline/
+freeline_project_description.json
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+fastlane/readme.md
+
+# Version control
+*.orig
+*.rej
+
+# Android Studio 3 in .gitignore file
+.idea/caches/build_file_checksums.ser
+
+# ============================================================
+# Project-Specific Exclusions
+# ============================================================
+
+# Migration and documentation artifacts (should be committed)
+!ARUCO_MIGRATION_SUMMARY.md
+!docs/ARUCO_MARKER_GENERATION.md
+
+# ============================================================
+# Python Backend (server/)
+# ============================================================
+
+server/__pycache__/
+server/*/__pycache__/
+server/*/*/__pycache__/
+server/venv/
+server/.env
+
+server/storage/raw/*
+!server/storage/raw/.gitkeep
+server/storage/crops/*
+!server/storage/crops/.gitkeep
+server/storage/annotated/*
+!server/storage/annotated/.gitkeep
+
+server/weights/*
+!server/weights/.gitkeep
+
+# Memory dumps
+*.hprof
